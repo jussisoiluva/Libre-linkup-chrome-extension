@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="./package/dist/chart.umd.js"></script>
+    <title>Glucose Monitor</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <main>
+        <h1>Glucose Monitor</h1>
+
+        <!-- Glucose Data Section -->
+        <section id="glucoseData" class="hidden">
+            <p id="glucoseLevel">Please set your credentials</p>
+            <p id="time">Please set your credentials</p>
+            <button id="refreshButton">Refresh</button>
+        </section>
+
+        <!-- Credentials Form Section -->
+        <section id="credentialsForm">
+            <h2>Set Credentials</h2>
+            <form id="loginForm">
+                <input type="email" id="email" placeholder="Email" required>
+                <input type="password" id="password" placeholder="Password" required>
+                <select id="region" required>
+                    <option value="EU">Europe</option>
+                    <option value="US">United States</option>
+                </select>
+                <div class="threshold-inputs">
+                    <input type="number" id="lowThreshold" placeholder="Low Threshold" required>
+                    <input type="number" id="highThreshold" placeholder="High Threshold" required>
+                </div>
+                <button type="submit">Save</button>
+            </form>
+        </section>
+
+        <!-- Debug Information Section if debug remove style="display: none;" -->
+        <section id="debugInfo" style="display: none;" ></section>
+    </main>
+
+    <script type="module" src="popup.js"></script>
+</body>
+</html>
