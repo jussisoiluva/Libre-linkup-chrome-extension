@@ -37,6 +37,38 @@ h2 {
   margin-bottom: 20px;
 }
 
+.unit-toggle {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.unit-option {
+  width: auto;
+  display: inline-block;
+  margin: 0;
+  padding: 4px 12px;
+  font-size: 12px;
+  background-color: transparent;
+  color: #888;
+  border: 1px solid var(--input-border);
+}
+
+.unit-option.active {
+  background-color: var(--primary-color);
+  color: white;
+  border-color: var(--primary-color);
+}
+
+.unit-option:hover {
+  background-color: #f0f0f0;
+}
+
+.unit-option.active:hover {
+  background-color: var(--hover-color);
+}
+
 .reading-row {
   display: flex;
   align-items: baseline;

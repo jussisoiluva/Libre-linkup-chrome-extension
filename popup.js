@@ -1,4 +1,4 @@
-import { log, displayDebugInfo } from './utils.js';
+import { log, displayDebugInfo, MGDL_PER_MMOL } from './utils.js';
 
 const elements = {
   refreshButton: document.getElementById('refreshButton'),
@@ -12,12 +12,33 @@ const elements = {
   trendArrow: document.getElementById('trendArrow'),
   lowThresholdInput: document.getElementById('lowThreshold'),
   highThresholdInput: document.getElementById('highThreshold'),
+  unitSelect: document.getElementById('unitSelect'),
+  unitMgButton: document.getElementById('unitMgButton'),
+  unitMmolButton: document.getElementById('unitMmolButton'),
   time: document.getElementById('time'),
   chartLabel: document.getElementById('chartLabel'),
   glucoseChart: document.getElementById('glucoseChart'),
 };
 
+// Thresholds and readings from the API are always mg/dL — `unit` only
+// controls how values are *displayed*, converted on the fly.
 let thresholds = { low: 70, high: 180 };
+let unit = 'mg/dL';
+let lastReading = null;
+let lastGraphData = null;
+
+const mgToMmol = mg => mg / MGDL_PER_MMOL;
+const mmolToMg = mmol => mmol * MGDL_PER_MMOL;
+
+function formatGlucose(mgValue) {
+  return unit === 'mmol/L'
+    ? `${mgToMmol(mgValue).toFixed(1)} mmol/L`
+    : `${Math.round(mgValue)} mg/dL`;
+}
+
+function formatGlucoseTick(mgValue) {
+  return unit === 'mmol/L' ? mgToMmol(mgValue).toFixed(1) : String(Math.round(mgValue));
+}
 
 document.addEventListener('DOMContentLoaded', init);
 
@@ -25,6 +46,17 @@ async function init() {
   elements.refreshButton.addEventListener('click', manualRefresh);
   elements.logoutButton.addEventListener('click', handleLogout);
   elements.loginForm.addEventListener('submit', handleCredentialsSubmit);
+  elements.unitSelect?.addEventListener('change', () => {
+    unit = elements.unitSelect.value;
+    updateThresholdPlaceholders();
+  });
+  elements.unitMgButton?.addEventListener('click', () => setUnit('mg/dL'));
+  elements.unitMmolButton?.addEventListener('click', () => setUnit('mmol/L'));
+
+  const { unit: storedUnit } = await chrome.storage.local.get(['unit']);
+  unit = storedUnit || 'mg/dL';
+  updateUnitToggleUI();
+  updateThresholdPlaceholders();
 
   const credentials = await getCachedCredentials();
   if (credentials.lowThreshold) thresholds.low = parseInt(credentials.lowThreshold);
@@ -72,6 +104,8 @@ function showCredentialsForm() {
 
 async function handleCredentialsSubmit(event) {
   event.preventDefault();
+  unit = elements.unitSelect.value;
+  await chrome.storage.local.set({ unit });
   const credentials = getFormData();
   thresholds.low = credentials.lowThreshold;
   thresholds.high = credentials.highThreshold;
@@ -83,13 +117,37 @@ function validateInput(input) {
   return input.replace(/(<([^>]+)>)/gi, '').trim();
 }
 
+// Thresholds are entered in whatever `unit` is currently selected, but are
+// always sent to background.js (and stored) as mg/dL, since that's the unit
+// the LibreLinkUp API itself reports readings in.
 function getFormData() {
+  const low = parseFloat(validateInput(elements.lowThresholdInput.value));
+  const high = parseFloat(validateInput(elements.highThresholdInput.value));
   return {
     email: validateInput(document.getElementById('email').value),
     password: document.getElementById('password').value,
-    lowThreshold: parseInt(validateInput(elements.lowThresholdInput.value)),
-    highThreshold: parseInt(validateInput(elements.highThresholdInput.value))
+    lowThreshold: Math.round(unit === 'mmol/L' ? mmolToMg(low) : low),
+    highThreshold: Math.round(unit === 'mmol/L' ? mmolToMg(high) : high),
   };
+}
+
+function setUnit(newUnit) {
+  unit = newUnit;
+  chrome.storage.local.set({ unit });
+  updateUnitToggleUI();
+  updateThresholdPlaceholders();
+  if (lastReading) renderGlucose(lastReading, lastGraphData);
+}
+
+function updateUnitToggleUI() {
+  elements.unitMgButton?.classList.toggle('active', unit === 'mg/dL');
+  elements.unitMmolButton?.classList.toggle('active', unit === 'mmol/L');
+  if (elements.unitSelect) elements.unitSelect.value = unit;
+}
+
+function updateThresholdPlaceholders() {
+  elements.lowThresholdInput.placeholder = unit === 'mmol/L' ? 'Low (e.g. 3.9)' : 'Low (e.g. 70)';
+  elements.highThresholdInput.placeholder = unit === 'mmol/L' ? 'High (e.g. 10.0)' : 'High (e.g. 180)';
 }
 
 function setLoginPending(pending) {
@@ -146,8 +204,13 @@ function handleGlucoseError(message) {
 // ─── Rendering ──────────────────────────────────────────────────────────────
 
 function renderGlucose(reading, graphData) {
+  lastReading = reading;
+  lastGraphData = graphData;
+
+  updateUnitToggleUI();
+
   const value = reading.Value;
-  elements.glucoseLevelElement.textContent = `${value} mg/dL`;
+  elements.glucoseLevelElement.textContent = formatGlucose(value);
   elements.glucoseLevelElement.style.color = valueColor(value);
 
   if (elements.trendArrow) {
@@ -159,7 +222,7 @@ function renderGlucose(reading, graphData) {
 
   drawGlucoseChart(graphData, reading, thresholds.low, thresholds.high);
 
-  log(`Glucose: ${value} mg/dL at ${ts}`);
+  log(`Glucose: ${formatGlucose(value)} at ${ts}`);
 }
 
 function valueColor(value) {
@@ -292,7 +355,7 @@ function drawGlucoseChart(rawData, currentReading, low, high) {
   for (let v = yStart; v <= maxV; v += yStep) {
     const y = ty(v);
     if (y >= plotTop && y <= plotBot) {
-      ctx.fillText(v, pad.l - 3, y + 3);
+      ctx.fillText(formatGlucoseTick(v), pad.l - 3, y + 3);
     }
   }
 

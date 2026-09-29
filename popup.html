@@ -12,6 +12,10 @@
 
         <!-- Glucose Data Section -->
         <section id="glucoseData" class="hidden">
+            <div class="unit-toggle" role="group" aria-label="Glucose unit">
+                <button type="button" id="unitMgButton" class="unit-option" data-unit="mg/dL">mg/dL</button>
+                <button type="button" id="unitMmolButton" class="unit-option" data-unit="mmol/L">mmol/L</button>
+            </div>
             <div class="reading-row">
                 <span id="glucoseLevel">Loading...</span>
                 <span id="trendArrow" class="trend-arrow"></span>
@@ -30,9 +34,13 @@
             <form id="loginForm">
                 <input type="email" id="email" placeholder="Email" autocomplete="username" required>
                 <input type="password" id="password" placeholder="Password" autocomplete="current-password" required>
+                <select id="unitSelect">
+                    <option value="mg/dL">mg/dL</option>
+                    <option value="mmol/L">mmol/L</option>
+                </select>
                 <div class="threshold-inputs">
-                    <input type="number" id="lowThreshold" placeholder="Low (e.g. 70)" required>
-                    <input type="number" id="highThreshold" placeholder="High (e.g. 180)" required>
+                    <input type="number" id="lowThreshold" placeholder="Low (e.g. 70)" step="any" required>
+                    <input type="number" id="highThreshold" placeholder="High (e.g. 180)" step="any" required>
                 </div>
                 <button type="submit">Sign In</button>
             </form>

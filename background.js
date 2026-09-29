@@ -1,4 +1,4 @@
-import { log } from './utils.js';
+import { log, toMgDl } from './utils.js';
 
 const GLOBAL_HOST = 'api.libreview.io';
 const DATA_HEADERS = {
@@ -173,7 +173,10 @@ async function fetchConnectionData(session) {
   }
 
   const connection = connData.data[0];
-  const currentReading = connection.glucoseMeasurement;
+  // Normalize to mg/dL here so every downstream consumer (badge coloring,
+  // thresholds, the popup's unit toggle) can rely on `.Value` always being
+  // mg/dL, regardless of what unit this LibreView account displays in.
+  const currentReading = { ...connection.glucoseMeasurement, Value: toMgDl(connection.glucoseMeasurement) };
   const patientId = connection.patientId;
 
   const graphData = await fetchGraphData(host, patientId, headers);
@@ -190,7 +193,8 @@ async function fetchGraphData(host, patientId, headers) {
   }
 
   const json = await res.json();
-  return json.data?.graphData ?? [];
+  const graphData = json.data?.graphData ?? [];
+  return graphData.map(point => ({ ...point, Value: toMgDl(point) }));
 }
 
 function updateBadge(level, lowThreshold, highThreshold) {
