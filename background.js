@@ -1,4 +1,4 @@
-import { log, toMgDl } from './utils.js';
+import { log, toMgDl, MGDL_PER_MMOL } from './utils.js';
 
 const GLOBAL_HOST = 'api.libreview.io';
 const DATA_HEADERS = {
@@ -29,7 +29,8 @@ async function updateGlucoseLevel() {
 
     log(`Glucose level updated: ${currentReading.Value} mg/dL`, 'background');
 
-    updateBadge(currentReading.Value, credentials.lowThreshold, credentials.highThreshold);
+    const { unit } = await chrome.storage.local.get(['unit']);
+    updateBadge(currentReading.Value, credentials.lowThreshold, credentials.highThreshold, unit);
 
     await chrome.storage.local.set({ cachedReading: currentReading, graphData });
 
@@ -197,8 +198,11 @@ async function fetchGraphData(host, patientId, headers) {
   return graphData.map(point => ({ ...point, Value: toMgDl(point) }));
 }
 
-function updateBadge(level, lowThreshold, highThreshold) {
-  chrome.action.setBadgeText({ text: String(level).slice(0, 4) });
+function updateBadge(level, lowThreshold, highThreshold, unit) {
+  // `level`/`lowThreshold`/`highThreshold` are always mg/dL — only the
+  // displayed badge text changes with the user's chosen unit.
+  const text = unit === 'mmol/L' ? (level / MGDL_PER_MMOL).toFixed(1) : String(Math.round(level));
+  chrome.action.setBadgeText({ text: text.slice(0, 4) });
   const color = level < lowThreshold ? '#ff0000' : level > highThreshold ? '#ff9900' : '#00cc55';
   chrome.action.setBadgeBackgroundColor({ color });
 }
@@ -212,6 +216,17 @@ function notifyPopup(data) {
   chrome.runtime.sendMessage({ action: 'updateGlucose', data })
     .catch(() => log("Popup not open, skipping message.", 'background'));
 }
+
+// Re-render the badge as soon as the unit preference changes, instead of
+// waiting for the next 1-minute poll to pick it up.
+chrome.storage.onChanged.addListener(async (changes, area) => {
+  if (area !== 'local' || !changes.unit) return;
+
+  const { cachedReading, lowThreshold, highThreshold } = await chrome.storage.local.get(
+    ['cachedReading', 'lowThreshold', 'highThreshold']
+  );
+  if (cachedReading) updateBadge(cachedReading.Value, lowThreshold, highThreshold, changes.unit.newValue);
+});
 
 chrome.runtime.onMessage.addListener((request) => {
   if (request.action === 'manualUpdate') {
