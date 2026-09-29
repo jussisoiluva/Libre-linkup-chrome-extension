@@ -4,6 +4,10 @@ A Chrome extension that shows your current glucose level and today's glucose
 trend in the toolbar, using the same LibreLinkUp API that the official
 LibreLinkUp mobile app uses.
 
+The point of it: you shouldn't have to pull out your phone and open an app
+just to check a glucose reading. A glance at the browser toolbar you already
+have open all day is enough.
+
 This extension is a **follower** client: it does not talk to a FreeStyle
 Libre sensor directly. It signs in as a LibreLinkUp follower and reads the
 data that the sensor wearer has chosen to share, exactly like the LibreLinkUp
