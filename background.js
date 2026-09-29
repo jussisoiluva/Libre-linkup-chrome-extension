@@ -1,32 +1,22 @@
 import { log } from './utils.js';
 
-// API endpoints for different regions
-const API_ENDPOINTS = {
-  EU: {
-    auth: 'https://api-eu.libreview.io/llu/auth/login',
-    data: 'https://api-eu.libreview.io/llu/connections',
-  },
-  US: {
-    auth: 'https://api.libreview.io/llu/auth/login',
-    data: 'https://api.libreview.io/llu/connections',
-    
-  }
+const GLOBAL_HOST = 'api.libreview.io';
+const DATA_HEADERS = {
+  'product': 'llu.android',
+  'version': '4.16.0',
 };
+// Refresh the session token slightly before it actually expires.
+const TOKEN_EXPIRY_BUFFER_MS = 60_000;
 
-// Create an alarm to update glucose levels every minute
 chrome.alarms.create('updateGlucose', { periodInMinutes: 1 });
 
-// Listen for the alarm and update glucose level
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === 'updateGlucose') {
-    updateGlucoseLevel();
-  }
+  if (alarm.name === 'updateGlucose') updateGlucoseLevel();
 });
 
-// Main function to update glucose level
 async function updateGlucoseLevel() {
   log('Updating glucose level', 'background');
-  
+
   try {
     const credentials = await getCachedCredentials();
     if (!areCredentialsValid(credentials)) {
@@ -34,156 +24,213 @@ async function updateGlucoseLevel() {
       return;
     }
 
-    const token = await authenticateUser(credentials);
-    const data = await fetchGlucoseData(token, credentials.region);
-    
-    log(`Glucose level updated: ${data.Value} mg/dL`, 'background');
-    
-    updateBadge(data.Value, credentials.lowThreshold, credentials.highThreshold);
-    notifyPopup(data);
+    const session = await getOrRefreshSession(credentials);
+    const { currentReading, graphData } = await fetchConnectionData(session);
+
+    log(`Glucose level updated: ${currentReading.Value} mg/dL`, 'background');
+
+    updateBadge(currentReading.Value, credentials.lowThreshold, credentials.highThreshold);
+
+    await chrome.storage.local.set({ cachedReading: currentReading, graphData });
+
+    notifyPopup({ current: currentReading, graphData });
   } catch (error) {
-    console.log('An error occurred:' + error);
+    console.error('An error occurred:', error);
     updateBadgeError();
-    // Don't expose detailed error messages to the user
-    notifyPopup({ error: 'An error occurred while updating glucose level.' });
+    notifyPopup({ error: error.message || 'An error occurred while updating glucose level.' });
   }
 }
 
-// Get stored credentials from local and session storage
 async function getCachedCredentials() {
-  const local = await chrome.storage.local.get(['email', 'region', 'lowThreshold', 'highThreshold']);
+  const local = await chrome.storage.local.get(['email', 'lowThreshold', 'highThreshold']);
   const session = await chrome.storage.session.get(['password']);
   return { ...local, ...session };
 }
 
-// Check if all required credentials are set
 function areCredentialsValid(credentials) {
-  return credentials.email && credentials.password && credentials.region && 
-         credentials.lowThreshold && credentials.highThreshold;
+  return !!(credentials.email && credentials.password &&
+    credentials.lowThreshold && credentials.highThreshold);
 }
 
-// Authenticate user and get token
-async function authenticateUser({ email, password, region }) {
-  const response = await fetch(API_ENDPOINTS[region].auth, {
+// ─── Auth session ───────────────────────────────────────────────────────────
+// LibreLinkUp's login endpoint hands back a bearer token that stays valid for
+// months (per community reverse-engineering notes: gist.github.com/khskekec/
+// 6c13ba01b10d3018d816706a32ae8ab2). Re-authenticating on every 1-minute poll
+// isn't just wasteful, the same notes describe accounts getting temporarily
+// locked out (HTTP 429/430) from doing exactly that — so we cache the token
+// and only log in again once it's actually close to expiring or rejected.
+
+function hostFor(region) {
+  return region ? `api-${region}.libreview.io` : GLOBAL_HOST;
+}
+
+async function getOrRefreshSession(credentials) {
+  const cached = await chrome.storage.session.get(['authTicket', 'accountId', 'region']);
+
+  if (cached.authTicket && cached.authTicket.expires * 1000 - TOKEN_EXPIRY_BUFFER_MS > Date.now()) {
+    return { token: cached.authTicket.token, accountId: cached.accountId, region: cached.region };
+  }
+
+  return login(credentials);
+}
+
+async function login({ email, password }) {
+  // No region is known yet (or the previous one stopped working): start at
+  // the global host, which redirects us to the account's actual region.
+  const { region: lastRegion } = await chrome.storage.session.get(['region']);
+
+  let region = lastRegion;
+  let result = await postLogin(hostFor(region), email, password);
+
+  if (result.data?.redirect && result.data?.region) {
+    region = result.data.region;
+    result = await postLogin(hostFor(region), email, password);
+  }
+
+  const token = result.data?.authTicket?.token;
+  const expires = result.data?.authTicket?.expires;
+  if (!token) {
+    throw new Error('Login succeeded but no session token was returned. Please try again.');
+  }
+
+  const accountId = await computeSHA256(result.data.user.id);
+
+  await chrome.storage.session.set({ authTicket: { token, expires }, accountId, region });
+
+  return { token, accountId, region };
+}
+
+async function postLogin(host, email, password) {
+  const response = await fetch(`https://${host}/llu/auth/login`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'product': 'llu.android',
-      'version': '4.12.0'
+      ...DATA_HEADERS,
     },
-    body: JSON.stringify({ email, password })
+    body: JSON.stringify({ email, password }),
   });
-  const raw = await response.text();
 
+  if (response.status === 401) {
+    throw new Error('Invalid email or password.');
+  }
+  if (response.status === 429 || response.status === 430) {
+    const body = await safeJson(response).catch(() => null);
+    const lockout = body?.data?.lockout;
+    throw new Error(lockout
+      ? `Too many login attempts. Try again in ${lockout}s.`
+      : 'Too many login attempts. Please wait a few minutes and try again.');
+  }
   if (!response.ok) {
-    console.error("Request failed:", response.status, response.statusText);
-    console.error("Raw response:", raw);
-    throw new Error(`Auth failed: ${response.status}`);
+    throw new Error(`Login failed: ${response.status}`);
   }
-  
-  let data;
+
+  return safeJson(response);
+}
+
+async function safeJson(response) {
+  const raw = await response.text();
   try {
-    data = JSON.parse(raw);
+    return JSON.parse(raw);
   } catch (e) {
-    console.error("Failed to parse JSON");
-    console.error("Raw response was:", raw);
-    throw e;
+    console.error('Failed to parse response:', raw);
+    throw new Error('Unexpected response from server.');
   }
-  
-  console.log("Parsed JSON:", data);
-  return data;
 }
 
 async function computeSHA256(text) {
   const encoder = new TextEncoder();
-  const data = encoder.encode(text);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  const hashHex = hashArray.map(byte => byte.toString(16).padStart(2, '0')).join('');
-  return hashHex;
+  const buffer = await crypto.subtle.digest('SHA-256', encoder.encode(text));
+  return Array.from(new Uint8Array(buffer)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+// ─── Connection + graph data ────────────────────────────────────────────────
 
-// Fetch glucose data using the authentication token
-async function fetchGlucoseData(token, region) {
-  log('ID:' +  await token.data.user.id);
+async function fetchConnectionData(session) {
+  const host = hostFor(session.region);
+  const headers = {
+    'Authorization': `Bearer ${session.token}`,
+    'Account-Id': session.accountId,
+    ...DATA_HEADERS,
+  };
 
-  log('HASH ID:' +  await computeSHA256(token.data.user.id));
-  const account = await computeSHA256(token.data.user.id);
-  const auth = await token.data.authTicket.token;
-  const response = await fetch(API_ENDPOINTS[region].data, {
-    headers: {
-      'Authorization': `Bearer ${auth}`,
-      'product': 'llu.android',
-      'version': '4.16.0',
-      'Account-Id' : `${account}`
+  const connRes = await fetch(`https://${host}/llu/connections`, { headers });
 
-    }
-  });
-  
-if (!response.ok) {
-  log('ERROR HERE: ' + JSON.stringify({
-    status: response.status,
-    statusText: response.statusText,
-    headers: Object.fromEntries(response.headers.entries()),
-    url: response.url
-  }, null, 2));
-  
-  // If you want to include the response body (requires async/await)
-  const errorBody = await response.text();
-  log('ERROR BODY: ' + errorBody);
-  throw new Error(`Failed to fetch glucose data: ${response.status} ${response.statusText}`);
-}
-
-  const data = await response.json();
-  log('DOING GLUCOSE DATA ' + response.status + ' >>> ' + JSON.stringify(data));
-  if (!data.data || data.data.length === 0 || !data.data[0].glucoseMeasurement) {
-    throw new Error('No glucose data available in the response');
+  if (connRes.status === 401) {
+    // Cached token was rejected (revoked/expired early) — drop it so the
+    // next poll performs a fresh login instead of repeating the same call.
+    await chrome.storage.session.remove('authTicket');
+    throw new Error('Session expired, will retry on next refresh.');
+  }
+  if (!connRes.ok) {
+    const body = await connRes.text();
+    log(`Connections error ${connRes.status}: ${body}`, 'background');
+    throw new Error(`Connections failed: ${connRes.status}`);
   }
 
-  return data.data[0].glucoseMeasurement;
+  const connData = await connRes.json();
+  if (!connData.data?.length || !connData.data[0].glucoseMeasurement) {
+    throw new Error('No glucose data available for this account.');
+  }
+
+  const connection = connData.data[0];
+  const currentReading = connection.glucoseMeasurement;
+  const patientId = connection.patientId;
+
+  const graphData = await fetchGraphData(host, patientId, headers);
+
+  return { currentReading, graphData };
 }
 
-// Update extension badge with glucose level and color
+async function fetchGraphData(host, patientId, headers) {
+  const res = await fetch(`https://${host}/llu/connections/${patientId}/graph`, { headers });
+
+  if (!res.ok) {
+    log(`Graph data error ${res.status} — skipping`, 'background');
+    return [];
+  }
+
+  const json = await res.json();
+  return json.data?.graphData ?? [];
+}
+
 function updateBadge(level, lowThreshold, highThreshold) {
-  chrome.action.setBadgeText({text: String(level).slice(0, 4)});
-  const color = level < lowThreshold ? '#ff0000' : level > highThreshold ? '#ff9900' : '#00ff00';
-  chrome.action.setBadgeBackgroundColor({color});
+  chrome.action.setBadgeText({ text: String(level).slice(0, 4) });
+  const color = level < lowThreshold ? '#ff0000' : level > highThreshold ? '#ff9900' : '#00cc55';
+  chrome.action.setBadgeBackgroundColor({ color });
 }
 
-// Update badge to show error
 function updateBadgeError() {
-  chrome.action.setBadgeText({text: 'ERR'});
-  chrome.action.setBadgeBackgroundColor({color: '#ff0000'});
+  chrome.action.setBadgeText({ text: 'ERR' });
+  chrome.action.setBadgeBackgroundColor({ color: '#ff0000' });
 }
 
-// Send updated glucose data to popup
 function notifyPopup(data) {
   chrome.runtime.sendMessage({ action: 'updateGlucose', data })
-    .catch(() => log("Popup is not open. Can't send update.", 'background'));
+    .catch(() => log("Popup not open, skipping message.", 'background'));
 }
 
-// Listen for manual update requests from popup
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((request) => {
   if (request.action === 'manualUpdate') {
     updateGlucoseLevel();
   } else if (request.action === 'setCredentials') {
     setCredentials(request.credentials);
+  } else if (request.action === 'clearCredentials') {
+    clearCredentials();
   }
 });
 
-// Set credentials in storage
-async function setCredentials({ email, password, region, lowThreshold, highThreshold }) {
-  // Store non-sensitive data in local storage
-  await chrome.storage.local.set({ email, region, lowThreshold, highThreshold });
-  
-  // Store sensitive data in session storage
+async function setCredentials({ email, password, lowThreshold, highThreshold }) {
+  await chrome.storage.local.set({ email, lowThreshold, highThreshold });
   await chrome.storage.session.set({ password });
-  
-  log('Credentials and settings saved');
+  // Credentials changed, so any cached token/region belonged to the old
+  // login — drop them and let the next poll re-detect region from scratch.
+  await chrome.storage.session.remove(['authTicket', 'accountId', 'region']);
+  log('Credentials and settings saved', 'background');
+  updateGlucoseLevel();
 }
 
 async function clearCredentials() {
-  await chrome.storage.local.remove(['email', 'region', 'lowThreshold', 'highThreshold']);
+  await chrome.storage.local.remove(['email', 'lowThreshold', 'highThreshold', 'graphData', 'cachedReading']);
   await chrome.storage.session.clear();
+  chrome.action.setBadgeText({ text: '' });
 }

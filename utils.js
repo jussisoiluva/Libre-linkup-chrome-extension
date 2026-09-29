@@ -5,7 +5,7 @@ export function log(message, context = 'popup') {
   if (typeof document !== 'undefined' && context === 'popup') {
     const debugInfo = document.getElementById('debugInfo');
     if (debugInfo) {
-      debugInfo.innerHTML += message + '<br>';
+      debugInfo.append(message, document.createElement('br'));
     }
   } else {
     // Log the message without using the document object

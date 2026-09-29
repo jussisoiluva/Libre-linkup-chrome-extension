@@ -3,7 +3,6 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <script src="./package/dist/chart.umd.js"></script>
     <title>Glucose Monitor</title>
     <link rel="stylesheet" href="styles.css">
 </head>
@@ -13,31 +12,34 @@
 
         <!-- Glucose Data Section -->
         <section id="glucoseData" class="hidden">
-            <p id="glucoseLevel">Please set your credentials</p>
-            <p id="time">Please set your credentials</p>
+            <div class="reading-row">
+                <span id="glucoseLevel">Loading...</span>
+                <span id="trendArrow" class="trend-arrow"></span>
+            </div>
+            <p id="time" class="time-label"></p>
+            <p id="chartLabel" class="chart-label"></p>
+            <canvas id="glucoseChart" width="380" height="150"></canvas>
             <button id="refreshButton">Refresh</button>
+            <button id="logoutButton" class="secondary">Log Out</button>
         </section>
 
         <!-- Credentials Form Section -->
         <section id="credentialsForm">
-            <h2>Set Credentials</h2>
+            <h2>Sign In</h2>
+            <p id="loginError" class="login-error hidden"></p>
             <form id="loginForm">
-                <input type="email" id="email" placeholder="Email" required>
-                <input type="password" id="password" placeholder="Password" required>
-                <select id="region" required>
-                    <option value="EU">Europe</option>
-                    <option value="US">United States</option>
-                </select>
+                <input type="email" id="email" placeholder="Email" autocomplete="username" required>
+                <input type="password" id="password" placeholder="Password" autocomplete="current-password" required>
                 <div class="threshold-inputs">
-                    <input type="number" id="lowThreshold" placeholder="Low Threshold" required>
-                    <input type="number" id="highThreshold" placeholder="High Threshold" required>
+                    <input type="number" id="lowThreshold" placeholder="Low (e.g. 70)" required>
+                    <input type="number" id="highThreshold" placeholder="High (e.g. 180)" required>
                 </div>
-                <button type="submit">Save</button>
+                <button type="submit">Sign In</button>
             </form>
         </section>
 
-        <!-- Debug Information Section if debug remove style="display: none;" -->
-        <section id="debugInfo" style="display: none;" ></section>
+        <!-- Debug Information (remove style to enable) -->
+        <section id="debugInfo" style="display: none;"></section>
     </main>
 
     <script type="module" src="popup.js"></script>

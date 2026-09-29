@@ -13,7 +13,7 @@ body {
   color: var(--text-color);
   margin: 0;
   padding: 20px;
-  width: 300px;
+  width: 420px;
 }
 
 h1 {
@@ -37,12 +37,54 @@ h2 {
   margin-bottom: 20px;
 }
 
+.reading-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
 #glucoseLevel {
-  font-size: 28px;
+  font-size: 36px;
   font-weight: bold;
   color: var(--primary-color);
   text-align: center;
-  margin-bottom: 20px;
+}
+
+.trend-arrow {
+  font-size: 26px;
+  line-height: 1;
+}
+
+.time-label {
+  text-align: center;
+  color: #888;
+  font-size: 12px;
+  margin: 0 0 14px;
+}
+
+.chart-label {
+  text-align: center;
+  color: #888;
+  font-size: 11px;
+  margin: 0 0 4px;
+}
+
+#glucoseChart {
+  display: block;
+  width: 100%;
+  border-radius: 6px;
+  margin-bottom: 4px;
+}
+
+.login-error {
+  background-color: #fdecea;
+  color: #c0392b;
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-size: 13px;
+  margin-bottom: 15px;
 }
 
 button {
@@ -55,12 +97,28 @@ button {
   font-size: 16px;
   display: block;
   width: 100%;
-  margin: 15px 0;
+  margin: 15px 0 0;
   transition: background-color 0.3s ease;
 }
 
 button:hover {
   background-color: var(--hover-color);
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+button.secondary {
+  background-color: transparent;
+  color: #888;
+  border: 1px solid var(--input-border);
+  margin-top: 8px;
+}
+
+button.secondary:hover {
+  background-color: #f0f0f0;
 }
 
 input, select {

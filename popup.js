@@ -1,38 +1,55 @@
 import { log, displayDebugInfo } from './utils.js';
 
-// Cache DOM elements
 const elements = {
   refreshButton: document.getElementById('refreshButton'),
+  logoutButton: document.getElementById('logoutButton'),
   loginForm: document.getElementById('loginForm'),
+  loginError: document.getElementById('loginError'),
   glucoseData: document.getElementById('glucoseData'),
   credentialsForm: document.getElementById('credentialsForm'),
   debugInfo: document.getElementById('debugInfo'),
   glucoseLevelElement: document.getElementById('glucoseLevel'),
-  regionSelect: document.getElementById('region'),
+  trendArrow: document.getElementById('trendArrow'),
   lowThresholdInput: document.getElementById('lowThreshold'),
   highThresholdInput: document.getElementById('highThreshold'),
-  time: document.getElementById('time')
+  time: document.getElementById('time'),
+  chartLabel: document.getElementById('chartLabel'),
+  glucoseChart: document.getElementById('glucoseChart'),
 };
 
-// Initialize the popup
+let thresholds = { low: 70, high: 180 };
+
 document.addEventListener('DOMContentLoaded', init);
 
 async function init() {
   elements.refreshButton.addEventListener('click', manualRefresh);
+  elements.logoutButton.addEventListener('click', handleLogout);
   elements.loginForm.addEventListener('submit', handleCredentialsSubmit);
 
   const credentials = await getCachedCredentials();
+  if (credentials.lowThreshold) thresholds.low = parseInt(credentials.lowThreshold);
+  if (credentials.highThreshold) thresholds.high = parseInt(credentials.highThreshold);
+
   checkCredentialsAndInitUI(credentials);
+
+  // Show cached data immediately while fresh data loads
+  const cached = await chrome.storage.local.get(['graphData', 'cachedReading']);
+  if (cached.cachedReading && cached.graphData) {
+    renderGlucose(cached.cachedReading, cached.graphData);
+  }
 }
 
-// Get stored credentials from local and session storage
 async function getCachedCredentials() {
-  const local = await chrome.storage.local.get(['email', 'region', 'lowThreshold', 'highThreshold']);
+  const local = await chrome.storage.local.get(['email', 'lowThreshold', 'highThreshold']);
   const session = await chrome.storage.session.get(['password']);
   return { ...local, ...session };
 }
 
-// Check if credentials are set and show appropriate UI
+function areCredentialsValid(credentials) {
+  return !!(credentials.email && credentials.password &&
+    credentials.lowThreshold && credentials.highThreshold);
+}
+
 function checkCredentialsAndInitUI(credentials) {
   if (areCredentialsValid(credentials)) {
     showGlucoseData();
@@ -43,83 +60,268 @@ function checkCredentialsAndInitUI(credentials) {
   displayDebugInfo();
 }
 
-// Check if all required credentials are set
-function areCredentialsValid(credentials) {
-  return credentials.email && credentials.password && credentials.region && 
-         credentials.lowThreshold && credentials.highThreshold;
-}
-
-// Show glucose data view
 function showGlucoseData() {
   elements.glucoseData.classList.remove('hidden');
   elements.credentialsForm.classList.add('hidden');
-  log('Showing glucose data view');
 }
 
-// Show credentials form
 function showCredentialsForm() {
   elements.glucoseData.classList.add('hidden');
   elements.credentialsForm.classList.remove('hidden');
-  log('Showing credentials form');
 }
 
-// Handle credentials form submission
 async function handleCredentialsSubmit(event) {
   event.preventDefault();
   const credentials = getFormData();
-  await setCredentials(credentials);
+  thresholds.low = credentials.lowThreshold;
+  thresholds.high = credentials.highThreshold;
+  setLoginPending(true);
+  chrome.runtime.sendMessage({ action: 'setCredentials', credentials });
 }
 
-// Input validation function
 function validateInput(input) {
-  // Remove any HTML tags and trim whitespace
-  return input.replace(/(<([^>]+)>)/gi, "").trim();
+  return input.replace(/(<([^>]+)>)/gi, '').trim();
 }
 
-// Get form data with input validation
 function getFormData() {
   return {
     email: validateInput(document.getElementById('email').value),
-    password: document.getElementById('password').value, // Don't validate password to preserve special characters
-    region: validateInput(elements.regionSelect.value),
+    password: document.getElementById('password').value,
     lowThreshold: parseInt(validateInput(elements.lowThresholdInput.value)),
     highThreshold: parseInt(validateInput(elements.highThresholdInput.value))
   };
 }
 
-// Save credentials by sending them to background script
-async function setCredentials(credentials) {
-  chrome.runtime.sendMessage({ action: 'setCredentials', credentials });
-  checkCredentialsAndInitUI(credentials);
+function setLoginPending(pending) {
+  const submitButton = elements.loginForm.querySelector('button[type="submit"]');
+  submitButton.disabled = pending;
+  submitButton.textContent = pending ? 'Signing in…' : 'Sign In';
+  hideLoginError();
 }
 
-// Manually refresh glucose data
+function showLoginError(message) {
+  elements.loginError.textContent = message;
+  elements.loginError.classList.remove('hidden');
+}
+
+function hideLoginError() {
+  elements.loginError.textContent = '';
+  elements.loginError.classList.add('hidden');
+}
+
+function handleLogout() {
+  chrome.runtime.sendMessage({ action: 'clearCredentials' });
+  elements.loginForm.reset();
+  showCredentialsForm();
+}
+
 function manualRefresh() {
   elements.glucoseLevelElement.textContent = 'Loading...';
+  if (elements.trendArrow) elements.trendArrow.textContent = '';
   log('Manually refreshing glucose level...');
   chrome.runtime.sendMessage({ action: 'manualUpdate' });
 }
 
-// Handle errors
-export function handleError(error) {
-  console.error('Error:', error);
-  elements.glucoseLevelElement.textContent = `An error occurred. Please try again.`;
-  log(`Error occurred: ${error.message}`);
+// The region isn't known until the region-detecting login succeeds (see
+// background.js), so a bad email/password surfaces here as this exact
+// message — route the user back to the sign-in form to fix it instead of
+// leaving them stuck on a permanently-erroring reading.
+function handleGlucoseError(message) {
+  log(`Error: ${message}`);
 
-  if (error.message === 'Credentials or settings not set') {
+  const isAuthError = message === 'Invalid email or password.';
+  const onLoginScreen = !elements.credentialsForm.classList.contains('hidden');
+
+  if (isAuthError || onLoginScreen) {
+    setLoginPending(false);
     showCredentialsForm();
+    showLoginError(message);
+    return;
   }
+
+  elements.glucoseLevelElement.textContent = message;
+  elements.glucoseLevelElement.style.color = '#ff3333';
 }
 
-// Listen for glucose updates from background script
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  if (request.action === 'updateGlucose') {
-    if (request.data.error) {
-      elements.glucoseLevelElement.textContent = request.data.error;
-    } else {
-      elements.glucoseLevelElement.textContent = `Current Glucose Level: ${request.data.Value} mg/dL`;
-      elements.time.textContent = `Time: ${request.data.Timestamp}`;
-      log(`Glucose level: ${request.data.Value} mg/dL and Time ${request.data.Timestamp}`);
+// ─── Rendering ──────────────────────────────────────────────────────────────
+
+function renderGlucose(reading, graphData) {
+  const value = reading.Value;
+  elements.glucoseLevelElement.textContent = `${value} mg/dL`;
+  elements.glucoseLevelElement.style.color = valueColor(value);
+
+  if (elements.trendArrow) {
+    elements.trendArrow.textContent = trendSymbol(reading.TrendArrow);
+  }
+
+  const ts = formatTimestamp(reading.Timestamp);
+  elements.time.textContent = `Updated: ${ts}`;
+
+  drawGlucoseChart(graphData, reading, thresholds.low, thresholds.high);
+
+  log(`Glucose: ${value} mg/dL at ${ts}`);
+}
+
+function valueColor(value) {
+  if (value < thresholds.low) return '#ff3333';
+  if (value > thresholds.high) return '#ff9900';
+  return '#00cc55';
+}
+
+function trendSymbol(arrow) {
+  return ['', '↑↑', '↑', '↗', '→', '↘', '↓', '↓↓'][arrow] ?? '';
+}
+
+function formatTimestamp(ts) {
+  const d = new Date(ts);
+  return isNaN(d.getTime()) ? ts : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+// ─── Daily Chart ────────────────────────────────────────────────────────────
+
+function chartRangeLabel(points) {
+  if (points.length < 2) return '';
+  const start = new Date(points[0].t);
+  const end = new Date(points[points.length - 1].t);
+  const fmt = d => d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  return start.toDateString() === end.toDateString()
+    ? `Today's Glucose · ${fmt(start)}`
+    : `Glucose · ${fmt(start)} – ${fmt(end)}`;
+}
+
+function drawGlucoseChart(rawData, currentReading, low, high) {
+  const canvas = elements.glucoseChart;
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width;
+  const H = canvas.height;
+
+  // Combine graph data with the current (most recent) reading
+  const allData = [...(rawData || [])];
+  if (currentReading) allData.push(currentReading);
+
+  const points = allData
+    .map(r => ({ t: new Date(r.Timestamp).getTime(), v: Number(r.Value) }))
+    .filter(p => !isNaN(p.t) && p.v > 0)
+    .sort((a, b) => a.t - b.t)
+    .filter((p, i, arr) => i === 0 || p.t !== arr[i - 1].t); // deduplicate
+
+  if (elements.chartLabel) elements.chartLabel.textContent = chartRangeLabel(points);
+
+  ctx.clearRect(0, 0, W, H);
+
+  if (points.length < 2) {
+    ctx.fillStyle = '#999';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Waiting for data…', W / 2, H / 2);
+    return;
+  }
+
+  const pad = { t: 8, r: 10, b: 22, l: 36 };
+  const pw = W - pad.l - pad.r;
+  const ph = H - pad.t - pad.b;
+
+  const minT = points[0].t;
+  const maxT = points[points.length - 1].t;
+
+  const vals = points.map(p => p.v);
+  const dataMin = Math.min(...vals);
+  const dataMax = Math.max(...vals);
+  const minV = Math.min(dataMin, low) - 10;
+  const maxV = Math.max(dataMax, high) + 10;
+
+  const tx = t => pad.l + ((t - minT) / (maxT - minT || 1)) * pw;
+  const ty = v => pad.t + (1 - (v - minV) / (maxV - minV)) * ph;
+
+  const yLow = ty(low);
+  const yHigh = ty(high);
+  const plotTop = pad.t;
+  const plotBot = pad.t + ph;
+
+  // Background zones
+  ctx.fillStyle = 'rgba(255,150,0,0.10)';
+  ctx.fillRect(pad.l, plotTop, pw, Math.max(0, yHigh - plotTop));
+
+  ctx.fillStyle = 'rgba(0,200,80,0.07)';
+  ctx.fillRect(pad.l, yHigh, pw, Math.max(0, yLow - yHigh));
+
+  ctx.fillStyle = 'rgba(255,50,50,0.10)';
+  ctx.fillRect(pad.l, yLow, pw, Math.max(0, plotBot - yLow));
+
+  // Threshold dashed lines
+  ctx.lineWidth = 1;
+  ctx.setLineDash([3, 3]);
+
+  ctx.strokeStyle = 'rgba(255,100,100,0.55)';
+  ctx.beginPath();
+  ctx.moveTo(pad.l, yLow); ctx.lineTo(pad.l + pw, yLow);
+  ctx.stroke();
+
+  ctx.strokeStyle = 'rgba(255,160,0,0.55)';
+  ctx.beginPath();
+  ctx.moveTo(pad.l, yHigh); ctx.lineTo(pad.l + pw, yHigh);
+  ctx.stroke();
+
+  ctx.setLineDash([]);
+
+  // Glucose line
+  ctx.beginPath();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = '#ffc300';
+  ctx.lineJoin = 'round';
+  points.forEach((p, i) => {
+    const x = tx(p.t), y = ty(p.v);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  // Latest value dot
+  const last = points[points.length - 1];
+  ctx.beginPath();
+  ctx.arc(tx(last.t), ty(last.v), 3.5, 0, Math.PI * 2);
+  ctx.fillStyle = last.v < low ? '#ff3333' : last.v > high ? '#ff9900' : '#00cc55';
+  ctx.fill();
+
+  // Y-axis labels
+  ctx.fillStyle = '#888';
+  ctx.font = '9px sans-serif';
+  ctx.textAlign = 'right';
+  const yStep = Math.ceil((maxV - minV) / 4 / 10) * 10;
+  const yStart = Math.ceil(minV / yStep) * yStep;
+  for (let v = yStart; v <= maxV; v += yStep) {
+    const y = ty(v);
+    if (y >= plotTop && y <= plotBot) {
+      ctx.fillText(v, pad.l - 3, y + 3);
     }
+  }
+
+  // X-axis time labels
+  ctx.textAlign = 'center';
+  const xCount = 4;
+  for (let i = 0; i <= xCount; i++) {
+    const t = minT + (maxT - minT) * (i / xCount);
+    const d = new Date(t);
+    const label = `${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
+    ctx.fillText(label, tx(t), H - 5);
+  }
+
+  // Plot border
+  ctx.strokeStyle = '#e0e0e0';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(pad.l, pad.t, pw, ph);
+}
+
+// ─── Message listener ───────────────────────────────────────────────────────
+
+chrome.runtime.onMessage.addListener((request) => {
+  if (request.action !== 'updateGlucose') return;
+
+  if (request.data.error) {
+    handleGlucoseError(request.data.error);
+  } else {
+    setLoginPending(false);
+    showGlucoseData();
+    renderGlucose(request.data.current, request.data.graphData);
   }
 });
