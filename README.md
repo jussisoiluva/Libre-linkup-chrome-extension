@@ -50,15 +50,21 @@ Official reference: [LibreLinkUp FAQ](https://www.librelinkup.com/faqs) ·
 
 ## 2. Connect the extension
 
-1. Load the extension: `chrome://extensions` → enable **Developer mode** →
-   **Load unpacked** → select this folder.
-2. Click the extension icon and sign in with your LibreLinkUp **follower**
+1. Go to `chrome://extensions` and turn on **Developer mode** (top right).
+
+   <img src="img/developer-mode.png" alt="Chrome extensions page with the Developer mode toggle turned on" width="360">
+
+2. Click **Load unpacked** and select this folder.
+
+   <img src="img/chrome-add-extension-folder.png" alt="Chrome extensions page Load unpacked button" width="200">
+
+3. Click the extension icon and sign in with your LibreLinkUp **follower**
    email and password (the account from step 1) and set your low/high
    glucose thresholds.
 
    <img src="img/sign-in.png" alt="Extension popup showing the sign-in form" width="320">
 
-3. The extension detects your account's region automatically on first sign
+4. The extension detects your account's region automatically on first sign
    in — there's nothing to configure there.
 
 Once signed in, the popup shows the current value, trend arrow, and a chart
