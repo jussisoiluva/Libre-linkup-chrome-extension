@@ -40,6 +40,17 @@ function formatGlucoseTick(mgValue) {
   return unit === 'mmol/L' ? mgToMmol(mgValue).toFixed(1) : String(Math.round(mgValue));
 }
 
+// Rounds a raw step (range / desired tick count) to a "nice" 1/2/5×10ⁿ value,
+// e.g. 3.2 → 5, 0.7 → 1, 22 → 20 — the standard trick for readable axis ticks.
+function niceStep(range, targetTicks) {
+  if (!isFinite(range) || range <= 0) return 1;
+  const rawStep = range / targetTicks;
+  const magnitude = 10 ** Math.floor(Math.log10(rawStep));
+  const residual = rawStep / magnitude;
+  const niceResidual = residual > 5 ? 10 : residual > 2 ? 5 : residual > 1 ? 2 : 1;
+  return niceResidual * magnitude;
+}
+
 document.addEventListener('DOMContentLoaded', init);
 
 async function init() {
@@ -231,8 +242,10 @@ function valueColor(value) {
   return '#00cc55';
 }
 
+// LibreLinkUp's TrendArrow: 0 NotDetermined, 1 FallingQuickly, 2 Falling,
+// 3 Stable, 4 Rising, 5 RisingQuickly.
 function trendSymbol(arrow) {
-  return ['', '↑↑', '↑', '↗', '→', '↘', '↓', '↓↓'][arrow] ?? '';
+  return ['', '↓↓', '↓', '→', '↑', '↑↑'][arrow] ?? '';
 }
 
 function formatTimestamp(ts) {
@@ -350,12 +363,30 @@ function drawGlucoseChart(rawData, currentReading, low, high) {
   ctx.fillStyle = '#888';
   ctx.font = '9px sans-serif';
   ctx.textAlign = 'right';
-  const yStep = Math.ceil((maxV - minV) / 4 / 10) * 10;
-  const yStart = Math.ceil(minV / yStep) * yStep;
-  for (let v = yStart; v <= maxV; v += yStep) {
-    const y = ty(v);
-    if (y >= plotTop && y <= plotBot) {
-      ctx.fillText(formatGlucoseTick(v), pad.l - 3, y + 3);
+
+  if (unit === 'mmol/L') {
+    // Picking the step in mg/dL and converting it to mmol/L for display
+    // gives ugly numbers like "8.9" (18.0182 doesn't divide evenly into a
+    // round mg/dL step) — instead pick a round step directly in mmol/L
+    // (1/2/5/10…) and convert *that* back to mg/dL for pixel placement.
+    const dispMin = mgToMmol(minV);
+    const dispMax = mgToMmol(maxV);
+    const step = niceStep(dispMax - dispMin, 4);
+    const start = Math.ceil(dispMin / step) * step;
+    for (let dv = start; dv <= dispMax; dv += step) {
+      const y = ty(mmolToMg(dv));
+      if (y >= plotTop && y <= plotBot) {
+        ctx.fillText(step < 1 ? dv.toFixed(1) : String(Math.round(dv)), pad.l - 3, y + 3);
+      }
+    }
+  } else {
+    const yStep = Math.ceil((maxV - minV) / 4 / 10) * 10;
+    const yStart = Math.ceil(minV / yStep) * yStep;
+    for (let v = yStart; v <= maxV; v += yStep) {
+      const y = ty(v);
+      if (y >= plotTop && y <= plotBot) {
+        ctx.fillText(formatGlucoseTick(v), pad.l - 3, y + 3);
+      }
     }
   }
 
