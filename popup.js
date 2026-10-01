@@ -17,6 +17,8 @@ const elements = {
   unitMmolButton: document.getElementById('unitMmolButton'),
   time: document.getElementById('time'),
   chartLabel: document.getElementById('chartLabel'),
+  chartContainer: document.getElementById('chartContainer'),
+  chartTooltip: document.getElementById('chartTooltip'),
   glucoseChart: document.getElementById('glucoseChart'),
 };
 
@@ -24,8 +26,16 @@ const elements = {
 // controls how values are *displayed*, converted on the fly.
 let thresholds = { low: 70, high: 180 };
 let unit = 'mg/dL';
+// LibreLinkUp's graph endpoint doesn't hand back more than ~12h of history
+// regardless of what's requested, so there's no "24h" option to offer.
+const CHART_RANGE_HOURS = 12;
 let lastReading = null;
 let lastGraphData = null;
+
+// Set by drawGlucoseChart on every draw so the hover handler can map a mouse
+// position back to the nearest data point without recomputing the chart's
+// time/value → pixel scaling itself.
+let chartLayout = null;
 
 const mgToMmol = mg => mg / MGDL_PER_MMOL;
 const mmolToMg = mmol => mmol * MGDL_PER_MMOL;
@@ -63,6 +73,8 @@ async function init() {
   });
   elements.unitMgButton?.addEventListener('click', () => setUnit('mg/dL'));
   elements.unitMmolButton?.addEventListener('click', () => setUnit('mmol/L'));
+  elements.glucoseChart.addEventListener('mousemove', handleChartHover);
+  elements.glucoseChart.addEventListener('mouseleave', handleChartLeave);
 
   const { unit: storedUnit } = await chrome.storage.local.get(['unit']);
   unit = storedUnit || 'mg/dL';
@@ -265,7 +277,7 @@ function chartRangeLabel(points) {
     : `Glucose · ${fmt(start)} – ${fmt(end)}`;
 }
 
-function drawGlucoseChart(rawData, currentReading, low, high) {
+function drawGlucoseChart(rawData, currentReading, low, high, hoverIndex = null) {
   const canvas = elements.glucoseChart;
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
@@ -276,9 +288,11 @@ function drawGlucoseChart(rawData, currentReading, low, high) {
   const allData = [...(rawData || [])];
   if (currentReading) allData.push(currentReading);
 
+  const cutoff = Date.now() - CHART_RANGE_HOURS * 60 * 60 * 1000;
   const points = allData
     .map(r => ({ t: new Date(r.Timestamp).getTime(), v: Number(r.Value) }))
     .filter(p => !isNaN(p.t) && p.v > 0)
+    .filter(p => p.t >= cutoff)
     .sort((a, b) => a.t - b.t)
     .filter((p, i, arr) => i === 0 || p.t !== arr[i - 1].t); // deduplicate
 
@@ -287,6 +301,7 @@ function drawGlucoseChart(rawData, currentReading, low, high) {
   ctx.clearRect(0, 0, W, H);
 
   if (points.length < 2) {
+    chartLayout = null;
     ctx.fillStyle = '#999';
     ctx.font = '11px sans-serif';
     ctx.textAlign = 'center';
@@ -309,6 +324,8 @@ function drawGlucoseChart(rawData, currentReading, low, high) {
 
   const tx = t => pad.l + ((t - minT) / (maxT - minT || 1)) * pw;
   const ty = v => pad.t + (1 - (v - minV) / (maxV - minV)) * ph;
+
+  chartLayout = { points, tx, ty };
 
   const yLow = ty(low);
   const yHigh = ty(high);
@@ -404,6 +421,73 @@ function drawGlucoseChart(rawData, currentReading, low, high) {
   ctx.strokeStyle = '#e0e0e0';
   ctx.lineWidth = 1;
   ctx.strokeRect(pad.l, pad.t, pw, ph);
+
+  // Hover guide line + highlighted point
+  if (hoverIndex !== null && points[hoverIndex]) {
+    const hp = points[hoverIndex];
+    const hx = tx(hp.t);
+    const hy = ty(hp.v);
+
+    ctx.setLineDash([2, 2]);
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(hx, plotTop);
+    ctx.lineTo(hx, plotBot);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.beginPath();
+    ctx.arc(hx, hy, 4, 0, Math.PI * 2);
+    ctx.fillStyle = '#333';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(hx, hy, 2, 0, Math.PI * 2);
+    ctx.fillStyle = '#fff';
+    ctx.fill();
+  }
+}
+
+function handleChartHover(event) {
+  if (!chartLayout || !lastReading) return;
+
+  const canvas = elements.glucoseChart;
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const mouseX = (event.clientX - rect.left) * scaleX;
+
+  const { points, tx, ty } = chartLayout;
+  let nearestIndex = 0;
+  let nearestDist = Infinity;
+  points.forEach((p, i) => {
+    const dist = Math.abs(tx(p.t) - mouseX);
+    if (dist < nearestDist) {
+      nearestDist = dist;
+      nearestIndex = i;
+    }
+  });
+
+  drawGlucoseChart(lastGraphData, lastReading, thresholds.low, thresholds.high, nearestIndex);
+
+  const hovered = chartLayout.points[nearestIndex];
+  const tooltipX = chartLayout.tx(hovered.t) / scaleX;
+  const tooltipY = chartLayout.ty(hovered.v) / scaleY;
+
+  elements.chartTooltip.textContent = `${formatGlucose(hovered.v)} · ${formatTimestamp(hovered.t)}`;
+  elements.chartTooltip.classList.remove('hidden');
+
+  const containerWidth = elements.chartContainer.clientWidth;
+  const tooltipWidth = elements.chartTooltip.offsetWidth;
+  const clampedX = Math.max(tooltipWidth / 2 + 2, Math.min(containerWidth - tooltipWidth / 2 - 2, tooltipX));
+
+  elements.chartTooltip.style.left = `${clampedX}px`;
+  elements.chartTooltip.style.top = `${tooltipY}px`;
+}
+
+function handleChartLeave() {
+  elements.chartTooltip.classList.add('hidden');
+  if (lastReading) drawGlucoseChart(lastGraphData, lastReading, thresholds.low, thresholds.high);
 }
 
 // ─── Message listener ───────────────────────────────────────────────────────

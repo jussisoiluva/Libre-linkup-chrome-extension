@@ -103,6 +103,24 @@ h2 {
   margin: 0 0 4px;
 }
 
+.chart-container {
+  position: relative;
+}
+
+.chart-tooltip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform: translate(-50%, calc(-100% - 10px));
+  background-color: rgba(30, 30, 30, 0.9);
+  color: white;
+  font-size: 11px;
+  padding: 4px 7px;
+  border-radius: 4px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 #glucoseChart {
   display: block;
   width: 100%;

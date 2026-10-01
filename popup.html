@@ -22,7 +22,10 @@
             </div>
             <p id="time" class="time-label"></p>
             <p id="chartLabel" class="chart-label"></p>
-            <canvas id="glucoseChart" width="380" height="150"></canvas>
+            <div id="chartContainer" class="chart-container">
+                <canvas id="glucoseChart" width="380" height="150"></canvas>
+                <div id="chartTooltip" class="chart-tooltip hidden"></div>
+            </div>
             <button id="refreshButton">Refresh</button>
             <button id="logoutButton" class="secondary">Log Out</button>
         </section>
